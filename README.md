@@ -6,8 +6,8 @@ and receive answers grounded in retrieved document chunks.
 
 ## Live Links
 
-- GitHub Repository: pending push
-- Live Project: pending Vercel deployment
+- GitHub Repository: https://github.com/rachit-suresh/notebooklm-rag
+- Live Project: pending Vercel authentication
 
 ## Features
 
