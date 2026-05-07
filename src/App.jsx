@@ -6,6 +6,7 @@ import {
   Search,
   Send,
   ShieldCheck,
+  Sparkles,
   UploadCloud,
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
@@ -15,6 +16,11 @@ import { InMemoryVectorStore } from "./lib/vectorStore.js";
 
 const TOP_K = 4;
 const EMBEDDING_BATCH_SIZE = 80;
+const STARTER_QUESTIONS = [
+  "Summarize this document.",
+  "What are the key takeaways?",
+  "What does the document say about limitations?",
+];
 
 async function postJson(path, payload) {
   const response = await fetch(path, {
@@ -53,12 +59,14 @@ function App() {
     name: "",
     chunks: [],
     characters: 0,
+    size: 0,
   });
   const [question, setQuestion] = useState("");
   const [turns, setTurns] = useState([]);
   const [retrieved, setRetrieved] = useState([]);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
+  const [isDragActive, setIsDragActive] = useState(false);
 
   const ready = storeRef.current.size > 0;
   const statusLabel = useMemo(() => {
@@ -69,8 +77,7 @@ function App() {
     return "Waiting for upload";
   }, [ready, status]);
 
-  async function handleFileChange(event) {
-    const file = event.target.files?.[0];
+  async function handleSelectedFile(file) {
     if (!file) return;
 
     setError("");
@@ -95,15 +102,36 @@ function App() {
         name: file.name,
         chunks,
         characters: text.length,
+        size: file.size,
       });
       setStatus("ready");
     } catch (uploadError) {
-      setDocumentState({ name: "", chunks: [], characters: 0 });
+      setDocumentState({ name: "", chunks: [], characters: 0, size: 0 });
       setStatus("idle");
       setError(uploadError.message);
     } finally {
+      setIsDragActive(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
+  }
+
+  async function handleFileChange(event) {
+    await handleSelectedFile(event.target.files?.[0]);
+  }
+
+  function handleDragOver(event) {
+    event.preventDefault();
+    setIsDragActive(true);
+  }
+
+  function handleDragLeave(event) {
+    event.preventDefault();
+    setIsDragActive(false);
+  }
+
+  async function handleDrop(event) {
+    event.preventDefault();
+    await handleSelectedFile(event.dataTransfer.files?.[0]);
   }
 
   async function handleAsk(event) {
@@ -148,12 +176,23 @@ function App() {
 
   function resetDocument() {
     storeRef.current.clear();
-    setDocumentState({ name: "", chunks: [], characters: 0 });
+    setDocumentState({ name: "", chunks: [], characters: 0, size: 0 });
     setQuestion("");
     setTurns([]);
     setRetrieved([]);
     setError("");
     setStatus("idle");
+  }
+
+  function useStarterQuestion(starter) {
+    if (!ready || status === "answering") return;
+    setQuestion(starter);
+  }
+
+  function handleQuestionKeyDown(event) {
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      handleAsk(event);
+    }
   }
 
   return (
@@ -170,7 +209,12 @@ function App() {
             </div>
           </div>
 
-          <label className="upload-zone">
+          <label
+            className={`upload-zone ${isDragActive ? "drag-active" : ""}`}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
             <input
               ref={fileInputRef}
               type="file"
@@ -179,13 +223,13 @@ function App() {
             />
             <UploadCloud size={32} aria-hidden="true" />
             <strong>Upload PDF or text</strong>
-            <span>Indexed in this browser session</span>
+            <span>{isDragActive ? "Drop to index now" : "Drag here or browse"}</span>
           </label>
 
           <div className="status-strip">
             <span className={`status-dot ${ready ? "ready" : ""}`} />
             <span>{statusLabel}</span>
-            {(status === "reading" || status === "embedding") && (
+            {(status === "reading" || status === "embedding" || status === "answering") && (
               <Loader2 className="spin" size={16} aria-hidden="true" />
             )}
           </div>
@@ -200,8 +244,12 @@ function App() {
               <strong>{documentState.chunks.length}</strong>
             </div>
             <div>
-              <span>Characters</span>
-              <strong>{documentState.characters.toLocaleString()}</strong>
+              <span>Size</span>
+              <strong>
+                {documentState.size
+                  ? `${Math.max(1, Math.round(documentState.size / 1024)).toLocaleString()} KB`
+                  : "0 KB"}
+              </strong>
             </div>
           </div>
 
@@ -222,6 +270,20 @@ function App() {
               <span>Answers use retrieved chunks only</span>
             </div>
           </header>
+
+          <div className="starter-row" aria-label="Question starters">
+            {STARTER_QUESTIONS.map((starter) => (
+              <button
+                type="button"
+                key={starter}
+                disabled={!ready || status === "answering"}
+                onClick={() => useStarterQuestion(starter)}
+              >
+                <Sparkles size={15} aria-hidden="true" />
+                <span>{starter}</span>
+              </button>
+            ))}
+          </div>
 
           <div className="conversation" aria-live="polite">
             {turns.length === 0 ? (
@@ -246,6 +308,14 @@ function App() {
                 </article>
               ))
             )}
+            {status === "answering" && (
+              <article className="turn pending">
+                <div className="answer">
+                  <span>RAG Assistant</span>
+                  <p>Retrieving the strongest document chunks...</p>
+                </div>
+              </article>
+            )}
           </div>
 
           {retrieved.length > 0 && (
@@ -260,6 +330,9 @@ function App() {
                     <div>
                       <strong>Chunk {source.index}</strong>
                       <span>{source.score.toFixed(3)}</span>
+                    </div>
+                    <div className="source-score" aria-hidden="true">
+                      <span style={{ width: `${Math.max(8, source.score * 100)}%` }} />
                     </div>
                     <p>{source.text}</p>
                   </article>
@@ -278,6 +351,7 @@ function App() {
               id="question"
               value={question}
               onChange={(event) => setQuestion(event.target.value)}
+              onKeyDown={handleQuestionKeyDown}
               placeholder={ready ? "Ask anything from the document" : "Upload a document first"}
               disabled={!ready || status === "answering"}
               rows={1}
